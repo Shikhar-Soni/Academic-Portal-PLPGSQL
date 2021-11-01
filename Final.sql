@@ -46,6 +46,33 @@ EXECUTE PROCEDURE check_enrollment();',
 NEW.studentid || '_e'
 );
 
+EXECUTE format('CREATE TRIGGER %I
+AFTER INSERT
+ON %I
+FOR EACH ROW
+EXECUTE PROCEDURE propogate_course_enrollment();',
+'enrolled_' || NEW.studentid || '_e_t',
+NEW.studentid || '_e'
+);
+
+EXECUTE format('CREATE TRIGGER %I
+BEFORE INSERT
+ON %I
+FOR EACH ROW
+EXECUTE PROCEDURE student_request();',
+'ticket_gen' || NEW.studentid || '_h_t',
+NEW.studentid || '_h'
+);
+
+EXECUTE format('CREATE TRIGGER %I
+AFTER INSERT
+ON %I
+FOR EACH ROW
+EXECUTE PROCEDURE student_request_later();',
+'ticket_generated' || NEW.studentid || '_h_t',
+NEW.studentid || '_h'
+);
+
 execute format('grant select on %I to %I;', NEW.studentid || '_t', NEW.studentid);
 execute format('grant select, insert on %I, %I to %I;', NEW.studentid || '_h', NEW.studentid || '_e', NEW.studentid);
 return NEW;
@@ -80,6 +107,10 @@ LANGUAGE PLPGSQL
 AS $$
 BEGIN
 
+if NEW.teacherid in (select teacherid from instructor_info) then
+return NEW;
+end if;
+
 execute format('create user %I with password ''123'';', NEW.teacherid);
 
 execute format('CREATE TABLE IF NOT EXISTS %I (courseid varchar(7),
@@ -89,6 +120,13 @@ status varchar(50) not null,
 secid integer not null,
 entry_no varchar(12),
 primary key(courseid, entry_no));', NEW.teacherid || '_h');
+
+execute format('CREATE TRIGGER %I
+AFTER UPDATE
+ON %I
+FOR EACH ROW
+EXECUTE PROCEDURE teacher_request();',
+'move_req_' || NEW.teacherid || '_h_t', NEW.teacherid || '_h');
 
 execute format('GRANT SELECT, UPDATE on %I to %I;', NEW.teacherid || '_h', NEW.teacherid);
 
@@ -135,6 +173,12 @@ secid integer not null,
 entry_no varchar(12),
 primary key(courseid, entry_no)
 );', NEW.batchadvisorid || '_h');
+
+execute format('CREATE TRIGGER %I
+AFTER UPDATE
+ON %I
+FOR EACH ROW
+EXECUTE PROCEDURE batch_advisor_request();', 'to_dean_' || NEW.batchadvisorid || '_h_t', NEW.batchadvisorid || '_h');
 
 execute format('GRANT SELECT, UPDATE on %I to %I;', NEW.batchadvisorid || '_h', NEW.batchadvisorid);
 

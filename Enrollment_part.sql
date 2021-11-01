@@ -4,6 +4,7 @@
 -- calculate_CG
 
 -- check_enrollment and enroll
+-- propogate
 
 
 CREATE OR REPLACE FUNCTION yearsem()
@@ -144,8 +145,12 @@ BEGIN
 -- time-table - ok
 -- cg requirement - ok
 -- 1.25 rule - ok
--- secid check add 😲
-if NEW.courseid not in (select course_offerings.courseid from course_offerings) then
+
+if session_user = 'postgres' then
+return NEW;
+end if;
+
+if (NEW.courseid, NEW.secid) not in (select courseid, secid from course_offerings) then
 raise exception 'Invalid Course !!';
 end if;
 
@@ -180,6 +185,11 @@ end if;
 -- 1.25 rule
 EXECUTE format('select sum(C) from (select courseid from %I where sem=%L and year=%L) as O, course_catalog as AB where AB.courseid=O.courseid', current_user||'_e', NEW.sem, NEW.year) into this_sem_credit;
 
+-- check 😲
+if this_sem_credit is null then
+this_sem_credit := 0;
+end if;
+
 execute format('select C from course_catalog where courseid = %L', NEW.courseid) into this_course_credit;
 this_sem_credit := this_sem_credit + this_course_credit;
 select lasttwosemcredit() into avg_last_two_sem_credit;
@@ -207,6 +217,26 @@ select a, b from yearsem() as (a integer, b integer) into sem_c, year_c;
 execute format('INSERT INTO %I VALUES(%L, %L, %L, %L)',  current_user || '_e', courseid, sem_c, year_c, secid);
 END;
 $$;
+
+CREATE OR REPLACE FUNCTION propogate_course_enrollment()
+RETURNS TRIGGER
+LANGUAGE PLPGSQL SECURITY DEFINER
+AS $$
+DECLARE
+BEGIN
+if session_user='postgres' then
+return NEW;
+end if;
+execute format('insert into %I values(%L);', NEW.courseid || NEW.secid || '_e', session_user);
+return NEW;
+END;
+$$;
+
+-- CREATE TRIGGER whatever_t
+-- AFTER INSERT
+-- ON studentid_e
+-- FOR EACH ROW
+-- EXECUTE PROCEDURE propogate_course_enrollment();
 
 --------------------------------------------------------------------------------------------------------
 
