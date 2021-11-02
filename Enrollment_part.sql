@@ -146,7 +146,7 @@ BEGIN
 -- cg requirement - ok
 -- 1.25 rule - ok
 
-if session_user = 'postgres' then
+if session_user = 'dean' or session_user = 'postgres' then
 return NEW;
 end if;
 
@@ -224,7 +224,7 @@ LANGUAGE PLPGSQL SECURITY DEFINER
 AS $$
 DECLARE
 BEGIN
-if session_user='postgres' then
+if session_user='dean' or session_user='postgres' then
 return NEW;
 end if;
 execute format('insert into %I values(%L);', NEW.courseid || NEW.secid || '_e', session_user);
