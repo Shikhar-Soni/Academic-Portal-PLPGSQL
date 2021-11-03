@@ -88,11 +88,7 @@ DECLARE
 ret integer:=0;
 _slot integer;
 BEGIN
--- execute format('select courseid from %I;',current_user||'_e');
--- select slot into ret from time_table where time_table.courseid=_courseid;
--- (select "2019csb1084_e".courseid from "2019csb1084_e")
--- execute format ('select %I.courseid from %I',current_user||'_e', current_user||'_e');
--- (select postgres_e.courseid from postgres_e)
+
 for _slot in execute format('select slot from time_table where time_table.courseid in (select courseid from %I)',current_user||'_e')
 loop
     if _slot in (select slot from time_table where time_table.courseid=_courseid) 
@@ -682,9 +678,7 @@ FOR EACH ROW
 EXECUTE PROCEDURE create_instructors();
 
 insert into instructor_info values(92, 'Teacher Person', 'CSE', 'cs303', 1);
--- insert into instructor_info values(91, 'Teacher Person', 'CSE', 'ge304', 1);
 insert into instructor_info values(91, 'Person Person', 'CSE', 'cs301', 1);
--- insert into instructor_info values(92, 'Person Person', 'CSE', 'cs304', 2);
 insert into instructor_info values(93, 'Person Teacher', 'MATH', 'cs302', 1);
 
 --------------------------------------------------------------------------------------------------------
@@ -995,6 +989,11 @@ insert into course_batches values('cs303', 1, 1, 2021, '2019chb');
 insert into course_batches values('cs303', 1, 1, 2021, '2019mcb');
 insert into course_batches values('cs303', 1, 1, 2021, '2019meb');
 insert into course_batches values('cs303', 1, 1, 2021, '2019eeb');
+insert into course_batches values('cs304', 1, 1, 2021, '2019chb');
+insert into course_batches values('cs304', 1, 1, 2021, '2019mcb');
+insert into course_batches values('cs304', 1, 1, 2021, '2019meb');
+insert into course_batches values('cs304', 1, 1, 2021, '2019eeb');
+insert into course_batches values('cs304', 1, 1, 2021, '2019csb');
 
 grant select on student_info, instructor_info, ba_info, course_catalog, course_offerings, pre_requisite, course_batches, time_table to PUBLIC;
 
