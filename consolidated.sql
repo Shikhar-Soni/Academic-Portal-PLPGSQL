@@ -66,6 +66,14 @@ year_c=year_c-1;
 end if;
 EXECUTE format('select sum(credits) from %I where sem=%L and year=%L;', current_user||'_t', sem_c, year_c) into last2_credit;
 
+if last_credit = 0 then
+last_credit = 18.0;
+end if;
+
+if last2_credit = 0 then
+last2_credit = 18.5;
+end if;
+
 avg_credit=(last_credit+last2_credit)/2.0;
 return avg_credit;
 
@@ -108,13 +116,14 @@ RT record;
 BEGIN
 ret := 0.0;
 sum_c := 0.0;
--- grade < 4.0 is fail and not counted in CG
-for RT in execute format('select * from %I where grade > 4.0', current_user || '_t') loop
+-- grade 0.0 is fail and not counted in CG
+for RT in execute format('select * from %I where grade > 0.0', current_user || '_t') loop
 sum_c := sum_c + RT.credits;
 ret := ret + RT.credits * RT.grade;
 end loop;
-
-ret := ret / sum_c;
+if sum_c > 0.0 then
+    ret := ret / sum_c;
+end if;
 return ret;
 END;
 $$;
@@ -146,7 +155,7 @@ BEGIN
 -- cg requirement - ok
 -- 1.25 rule - ok
 
-if session_user = 'postgres' then
+if session_user = 'dean' or session_user = 'postgres' then
 return NEW;
 end if;
 
@@ -185,7 +194,6 @@ end if;
 -- 1.25 rule
 EXECUTE format('select sum(C) from (select courseid from %I where sem=%L and year=%L) as O, course_catalog as AB where AB.courseid=O.courseid', current_user||'_e', NEW.sem, NEW.year) into this_sem_credit;
 
--- check 😲
 if this_sem_credit is null then
 this_sem_credit := 0;
 end if;
@@ -224,13 +232,83 @@ LANGUAGE PLPGSQL SECURITY DEFINER
 AS $$
 DECLARE
 BEGIN
-if session_user='postgres' then
+if session_user='dean' or session_user='postgres' then
 return NEW;
 end if;
 execute format('insert into %I values(%L);', NEW.courseid || NEW.secid || '_e', session_user);
 return NEW;
 END;
 $$;
+
+
+CREATE OR REPLACE FUNCTION Upload_time_table(filename varchar(400))
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+DECLARE
+csv_path varchar(400);
+BEGIN
+-- change security to Everyone
+csv_path := 'C:\Users\Hp\Downloads\' || file_name || '.csv';
+execute format('copy %I from %L with delimiter '','' csv;', time_table, csv_path);
+END;
+$$;
+
+REVOKE ALL ON FUNCTION Upload_time_table FROM PUBLIC;
+
+CREATE OR REPLACE FUNCTION load_grade_to_transcripts(_courseid varchar(7), _secid integer)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+DECLARE
+jj record;
+credits_now integer;
+keep_track integer;
+_year integer;
+_sem integer;
+BEGIN
+/*
+    Only used by dean academic section to update all the grades into the student transcript tables
+*/
+select a, b from yearsem() as (a integer, b integer) into _sem, _year;
+
+select C from course_catalog where courseid = _courseid into credits_now;
+keep_track := 0;
+execute format('select count(*) from (select studentid from %I except select studentid from %I) as extraguys;', _courseid || _secid || '_g', _courseid || _secid || '_e') into keep_track;
+
+if keep_track > 0 then
+    raise exception 'All the grades not updated yet !!';
+end if;
+
+for jj in execute format('select * from %I;', _courseid || _secid || '_g') loop
+execute format('insert into %I values(%L, %L, %L, %L, %L)', jj.studentid || '_t', _courseid, credits_now, _sem, _year, jj.grade);
+end loop;
+
+END;
+$$;
+
+REVOKE ALL ON FUNCTION load_grade_to_transcripts FROM PUBLIC;
+
+CREATE OR REPLACE FUNCTION load_grade(courseid varchar(7), secid integer, file_name varchar(1000))
+RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER
+AS $$
+DECLARE
+csv_path varchar(50);
+keep_track integer;
+BEGIN
+-- change security to Everyone
+execute format('select count(*) from instructor_info where teacherid=%L and courseid=%L', session_user, courseid) into keep_track;
+if keep_track = 0 then
+    raise exception 'access denied';
+end if;
+csv_path := 'C:\Users\Hp\Downloads\' || file_name || '.csv';
+execute format('copy %I from %L with delimiter '','' csv;', courseid || secid || '_g', csv_path);
+END;
+$$;
+
+REVOKE ALL ON FUNCTION load_grade FROM PUBLIC;
+
 
 -- CREATE TRIGGER whatever_t
 -- AFTER INSERT
@@ -355,6 +433,8 @@ return NEW;
 END;
 $$;
 
+---------------------------------------------------
+
 CREATE OR REPLACE FUNCTION approve_teacher(studentid varchar(12), course varchar(7), approval varchar(3))
 RETURNS void
 LANGUAGE PLPGSQL
@@ -378,6 +458,8 @@ execute format('INSERT INTO %I VALUES(%L,%L,%L,%L,%L,%L,%L);',  batchadvisor || 
 return NEW;
 END;
 $$;
+
+--------------------------------------------------------------------------------
 
 CREATE OR REPLACE FUNCTION approve_ba(studentid varchar(12), course varchar(7), approval varchar(3))
 RETURNS void
@@ -403,6 +485,8 @@ execute format('INSERT INTO %I VALUES(%L,%L,%L,%L,%L,%L,%L,%L);',  'dean' || '_h
 return NEW;
 END;
 $$;
+
+-------------------------------------------------
 
 CREATE OR REPLACE FUNCTION approve_dean(studentid varchar(12), course varchar(7), approval varchar(3))
 RETURNS void
@@ -442,12 +526,14 @@ ON dean_h
 FOR EACH ROW
 EXECUTE PROCEDURE to_dean_request();
 
--------------------------------------------------------------------------------------------------
-
+---------------------------------------------
 create user dean with password 'imdean';
 
+GRANT EXECUTE ON FUNCTION Upload_time_table TO dean;
+GRANT EXECUTE ON FUNCTION load_grade_to_transcripts TO dean;
 grant select, update on dean_h to dean;
 
+-- student info
 create table student_info(
     studentid varchar(12) primary key,
     _name varchar(50) not null,
@@ -536,9 +622,15 @@ FOR EACH ROW
 EXECUTE PROCEDURE create_student();
 
 insert into student_info values('2019csb1072', 'Name Surname', 'CSE');
-insert into student_info values('2019csb1063', 'Nice Guy', 'CSE');
+insert into student_info values('2019eeb1063', 'Nice Guy', 'EE');
 insert into student_info values('2019meb1214', 'Another Guy', 'ME');
+insert into student_info values('2019mmb1372', 'Random guy', 'MM');
+insert into student_info values('2019mcb1141', 'Another One', 'MNC');
+insert into student_info values('2019chb1217', 'Guy Random', 'CH');
+insert into student_info values('2019ceb1319', 'Guy Random', 'CE');
 
+--------------------------------------------------------------------------------------------------------
+-- instructor info
 
 create table instructor_info(
     teacherid integer,
@@ -577,6 +669,7 @@ EXECUTE PROCEDURE teacher_request();',
 'move_req_' || NEW.teacherid || '_h_t', NEW.teacherid || '_h');
 
 execute format('GRANT SELECT, UPDATE on %I to %I;', NEW.teacherid || '_h', NEW.teacherid);
+execute format('GRANT EXECUTE ON FUNCTION load_grade TO %I;', NEW.teacherid);
 
 return NEW;
 END;
@@ -589,11 +682,13 @@ FOR EACH ROW
 EXECUTE PROCEDURE create_instructors();
 
 insert into instructor_info values(92, 'Teacher Person', 'CSE', 'cs303', 1);
--- insert into instructor_info values(91, 'Teacher Person', 'CSE', 'ge103', 1);
+-- insert into instructor_info values(91, 'Teacher Person', 'CSE', 'ge304', 1);
 insert into instructor_info values(91, 'Person Person', 'CSE', 'cs301', 1);
--- insert into instructor_info values(92, 'Person Person', 'CSE', 'cs203', 1);
+-- insert into instructor_info values(92, 'Person Person', 'CSE', 'cs304', 2);
 insert into instructor_info values(93, 'Person Teacher', 'MATH', 'cs302', 1);
 
+--------------------------------------------------------------------------------------------------------
+-- BA info
 
 create table ba_info(
     batchadvisorid varchar(8),
@@ -641,7 +736,13 @@ EXECUTE PROCEDURE create_ba();
 
 insert into ba_info values('2019csb', 15);
 insert into ba_info values('2019meb', 16);
+insert into ba_info values('2019mcb', 17);
+insert into ba_info values('2019mmb', 18);
+insert into ba_info values('2019eeb', 19);
+insert into ba_info values('2019chb', 20);
+insert into ba_info values('2019ceb', 21);
 
+---------------------------------------------------------------------------------------------------------
 
 create table course_catalog(
 courseid varchar(7) primary key,
@@ -672,12 +773,10 @@ pre_req varchar(7) not null
 
 insert into pre_requisite values('cs201', 'ge103');
 insert into pre_requisite values('cs202', 'cs201');
-insert into pre_requisite values('cs302', 'cs101');
-insert into pre_requisite values('cs302', 'cs201');
 insert into pre_requisite values('cs204', 'cs203');
 insert into pre_requisite values('cs301', 'cs201');
-insert into pre_requisite values('cs302', 'cs204');
-insert into pre_requisite values('cs302', 'cs201');
+insert into pre_requisite values('cs302', 'cs202');
+insert into pre_requisite values('cs303', 'cs203');
 
 select * from pre_requisite;
 
@@ -709,7 +808,6 @@ RETURN NEW;
 END;
 $$;
 
-
 CREATE TRIGGER insert_course_offering
 BEFORE INSERT
 ON course_offerings
@@ -717,9 +815,10 @@ FOR EACH ROW
 EXECUTE PROCEDURE create_course_sec_table();
 
 -- course, teacherid, sec, sem, yr, cg
-insert into course_offerings values('cs301', 91, 1, 1, 2021, 7.0);
-insert into course_offerings values('cs302', 93, 1, 1, 2021, 7.0);
-insert into course_offerings values('cs303', 92, 1, 1, 2021, 8.0);
+insert into course_offerings values('cs301', 91, 1, 1, 2021, 7.5);
+insert into course_offerings values('cs302', 93, 1, 1, 2021, 0.0);
+insert into course_offerings values('cs303', 92, 1, 1, 2021, 0.0);
+insert into course_offerings values('cs304', 92, 1, 1, 2021, 7.0);
 
 CREATE TABLE time_table(
     courseid varchar(7) not null,
@@ -776,6 +875,68 @@ insert into time_table values('cs302',46);
 insert into time_table values('cs302',47);
 insert into time_table values('cs302',48);
 
+insert into time_table values('cs304',45);
+insert into time_table values('cs304',46);
+insert into time_table values('cs304',47);
+insert into time_table values('cs304',48);
+
+CREATE TABLE slot_time(
+    slotid integer primary key,
+    day integer not null,
+    slot integer not null,
+    time_s varchar(50) not null
+);
+
+insert into slot_time values(11, 1, 1, '9:00 am - 9:50 am');
+insert into slot_time values(12, 1, 2, '10:00 am - 10:50 am');
+insert into slot_time values(13, 1, 3, '11:00 am - 11:50 am');
+insert into slot_time values(14, 1, 4, '12:00 pm - 12:50 pm');
+insert into slot_time values(15, 1, 5, '2:00 pm - 2:50 pm');
+insert into slot_time values(16, 1, 6, '3:00 pm - 3:50 pm');
+insert into slot_time values(17, 1, 7, '4:00 pm - 4:50 pm');
+insert into slot_time values(18, 1, 8, '5:00 pm - 5:50 pm');
+insert into slot_time values(19, 1, 9, '6:00 pm - 6:50 pm');
+
+insert into slot_time values(21, 2, 1, '9:00 am - 9:50 am');
+insert into slot_time values(22, 2, 2, '10:00 am - 10:50 am');
+insert into slot_time values(23, 2, 3, '11:00 am - 11:50 am');
+insert into slot_time values(24, 2, 4, '12:00 pm - 12:50 pm');
+insert into slot_time values(25, 2, 5, '2:00 pm - 2:50 pm');
+insert into slot_time values(26, 2, 6, '3:00 pm - 3:50 pm');
+insert into slot_time values(27, 2, 7, '4:00 pm - 4:50 pm');
+insert into slot_time values(28, 2, 8, '5:00 pm - 5:50 pm');
+insert into slot_time values(29, 2, 9, '6:00 pm - 6:50 pm');
+
+insert into slot_time values(31, 3, 1, '9:00 am - 9:50 am');
+insert into slot_time values(32, 3, 2, '10:00 am - 10:50 am');
+insert into slot_time values(33, 3, 3, '11:00 am - 11:50 am');
+insert into slot_time values(34, 3, 4, '12:00 pm - 12:50 pm');
+insert into slot_time values(35, 3, 5, '2:00 pm - 2:50 pm');
+insert into slot_time values(36, 3, 6, '3:00 pm - 3:50 pm');
+insert into slot_time values(37, 3, 7, '4:00 pm - 4:50 pm');
+insert into slot_time values(38, 3, 8, '5:00 pm - 5:50 pm');
+insert into slot_time values(39, 3, 9, '6:00 pm - 6:50 pm');
+
+insert into slot_time values(41, 4, 1, '9:00 am - 9:50 am');
+insert into slot_time values(42, 4, 2, '10:00 am - 10:50 am');
+insert into slot_time values(43, 4, 3, '11:00 am - 11:50 am');
+insert into slot_time values(44, 4, 4, '12:00 pm - 12:50 pm');
+insert into slot_time values(45, 4, 5, '2:00 pm - 2:50 pm');
+insert into slot_time values(46, 4, 6, '3:00 pm - 3:50 pm');
+insert into slot_time values(47, 4, 7, '4:00 pm - 4:50 pm');
+insert into slot_time values(48, 4, 8, '5:00 pm - 5:50 pm');
+insert into slot_time values(49, 4, 9, '6:00 pm - 6:50 pm');
+
+insert into slot_time values(51, 5, 1, '9:00 am - 9:50 am');
+insert into slot_time values(52, 5, 2, '10:00 am - 10:50 am');
+insert into slot_time values(53, 5, 3, '11:00 am - 11:50 am');
+insert into slot_time values(54, 5, 4, '12:00 pm - 12:50 pm');
+insert into slot_time values(55, 5, 5, '2:00 pm - 2:50 pm');
+insert into slot_time values(56, 5, 6, '3:00 pm - 3:50 pm');
+insert into slot_time values(57, 5, 7, '4:00 pm - 4:50 pm');
+insert into slot_time values(58, 5, 8, '5:00 pm - 5:50 pm');
+insert into slot_time values(59, 5, 9, '6:00 pm - 6:50 pm');
+
 CREATE TABLE course_batches(
     courseid varchar(7) not null,
     secid integer not null,
@@ -824,6 +985,16 @@ insert into course_batches values('cs302', 1, 1, 2021, '2019csb');
 insert into course_batches values('cs302', 1, 1, 2021, '2019mcb');
 insert into course_batches values('cs303', 1, 1, 2021, '2019csb');
 insert into course_batches values('cs303', 1, 1, 2021, '2019mcb');
+insert into course_batches values('cs301', 1, 1, 2021, '2019meb');
+insert into course_batches values('cs301', 1, 1, 2021, '2019mmb');
+insert into course_batches values('cs301', 1, 1, 2021, '2019eeb');
+insert into course_batches values('cs302', 1, 1, 2021, '2019chb');
+insert into course_batches values('cs302', 1, 1, 2021, '2019ceb');
+insert into course_batches values('cs302', 1, 1, 2021, '2019eeb');
+insert into course_batches values('cs303', 1, 1, 2021, '2019chb');
+insert into course_batches values('cs303', 1, 1, 2021, '2019mcb');
+insert into course_batches values('cs303', 1, 1, 2021, '2019meb');
+insert into course_batches values('cs303', 1, 1, 2021, '2019eeb');
 
 grant select on student_info, instructor_info, ba_info, course_catalog, course_offerings, pre_requisite, course_batches, time_table to PUBLIC;
 
@@ -839,17 +1010,17 @@ insert into "2019csb1072_t" values ('cs203', 4, 1, 2020, 8);
 insert into "2019csb1072_t" values ('cs202', 4, 2, 2020, 8);
 insert into "2019csb1072_t" values ('cs204', 4, 2, 2020, 8);
 
-insert into "2019csb1063_t" values ('ma101', 3, 1, 2019, 7);
-insert into "2019csb1063_t" values ('ge103',  4.5, 1, 2019, 8);
-insert into "2019csb1063_t" values ('ns101', 1, 1, 2019, 10);
-insert into "2019csb1063_t" values ('cs101', 3, 2, 2019, 7);
-insert into "2019csb1063_t" values ('ma102', 3, 2, 2019, 8);
-insert into "2019csb1063_t" values ('ma102', 3, 2, 2019, 9);
-insert into "2019csb1063_t" values ('ns102', 1, 2, 2019, 9);
-insert into "2019csb1063_t" values ('cs201', 4, 1, 2020, 9);
-insert into "2019csb1063_t" values ('cs203', 4, 1, 2020, 9);
-insert into "2019csb1063_t" values ('cs202', 4, 2, 2020, 7);
-insert into "2019csb1063_t" values ('cs204', 4, 2, 2020, 9);
+insert into "2019eeb1063_t" values ('ma101', 3, 1, 2019, 7);
+insert into "2019eeb1063_t" values ('ge103',  4.5, 1, 2019, 8);
+insert into "2019eeb1063_t" values ('ns101', 1, 1, 2019, 10);
+insert into "2019eeb1063_t" values ('cs101', 3, 2, 2019, 7);
+insert into "2019eeb1063_t" values ('ma102', 3, 2, 2019, 8);
+insert into "2019eeb1063_t" values ('ma102', 3, 2, 2019, 9);
+insert into "2019eeb1063_t" values ('ns102', 1, 2, 2019, 9);
+insert into "2019eeb1063_t" values ('cs201', 4, 1, 2020, 9);
+insert into "2019eeb1063_t" values ('cs203', 4, 1, 2020, 9);
+insert into "2019eeb1063_t" values ('cs202', 4, 2, 2020, 7);
+insert into "2019eeb1063_t" values ('cs204', 4, 2, 2020, 9);
 
 insert into "2019meb1214_t" values('cs101', 3, 2, 2019, 9);
 insert into "2019meb1214_t" values('ge103', 4.5, 1, 2019, 9);
@@ -857,4 +1028,135 @@ insert into "2019meb1214_t" values('cs201', 4, 1, 2020, 9);
 insert into "2019meb1214_t" values('cs203', 4, 1, 2020, 9);
 insert into "2019meb1214_t" values('cs202', 4, 2, 2020, 8);
 insert into "2019meb1214_t" values('cs204', 4, 2, 2020, 10);
+insert into "2019mmb1372_t" values ('ma101', 3, 1, 2019, 5);
+insert into "2019mmb1372_t" values ('ge103', 4.5, 1, 2019, 4);
+insert into "2019mmb1372_t" values ('ns101', 1, 1, 2019, 5);
 
+insert into "2019mmb1372_t" values ('cs101', 3, 2, 2019, 5);
+insert into "2019mmb1372_t" values ('ma102', 3, 2, 2019, 4);
+insert into "2019mmb1372_t" values ('ma102', 3, 2, 2019, 4);
+insert into "2019mmb1372_t" values ('ns102', 1, 2, 2019, 4);
+
+insert into "2019mmb1372_t" values ('cs201', 4, 1, 2020, 0);
+insert into "2019mmb1372_t" values ('cs203', 4, 1, 2020, 4);
+
+insert into "2019mmb1372_t" values ('cs202', 4, 2, 2020, 5);
+insert into "2019mmb1372_t" values ('cs204', 4, 2, 2020, 4);
+
+insert into "2019mcb1141_t" values ('ma101', 3, 1, 2019, 4);
+insert into "2019mcb1141_t" values ('ge103', 4.5, 1, 2019, 4);
+insert into "2019mcb1141_t" values ('ns101', 1, 1, 2019, 5);
+
+insert into "2019mcb1141_t" values ('cs101', 3, 2, 2019, 4);
+insert into "2019mcb1141_t" values ('ma102', 3, 2, 2019, 4);
+insert into "2019mcb1141_t" values ('ma102', 3, 2, 2019, 5);
+insert into "2019mcb1141_t" values ('ns102', 1, 2, 2019, 4);
+
+insert into "2019mcb1141_t" values ('cs201', 4, 1, 2020, 5);
+insert into "2019mcb1141_t" values ('cs203', 4, 1, 2020, 4);
+
+insert into "2019mcb1141_t" values ('cs202', 4, 2, 2020, 4);
+insert into "2019mcb1141_t" values ('cs204', 4, 2, 2020, 5);
+
+
+insert into "2019chb1217_t" values ('ma101', 3, 1, 2019, 7);
+insert into "2019chb1217_t" values ('ge103', 4.5, 1, 2019, 8);
+insert into "2019chb1217_t" values ('ns101', 1, 1, 2019, 7);
+
+insert into "2019chb1217_t" values ('cs101', 3, 2, 2019, 7);
+insert into "2019chb1217_t" values ('ma102', 3, 2, 2019, 8);
+insert into "2019chb1217_t" values ('ma102', 3, 2, 2019, 7);
+insert into "2019chb1217_t" values ('ns102', 1, 2, 2019, 6);
+
+insert into "2019chb1217_t" values ('cs201', 4, 1, 2020, 8);
+insert into "2019chb1217_t" values ('cs203', 4, 1, 2020, 7);
+
+insert into "2019chb1217_t" values ('cs202', 4, 2, 2020, 8);
+insert into "2019chb1217_t" values ('cs204', 4, 2, 2020, 7);
+
+
+insert into "2019ceb1319_t" values ('ma101', 3, 1, 2019, 7);
+insert into "2019ceb1319_t" values ('ge103', 4.5, 1, 2019, 8);
+insert into "2019ceb1319_t" values ('ns101', 1, 1, 2019, 7);
+
+insert into "2019ceb1319_t" values ('cs101', 3, 2, 2019, 7);
+insert into "2019ceb1319_t" values ('ma102', 3, 2, 2019, 8);
+insert into "2019ceb1319_t" values ('ma102', 3, 2, 2019, 7);
+insert into "2019ceb1319_t" values ('ns102', 1, 2, 2019, 6);
+
+insert into "2019ceb1319_t" values ('cs201', 4, 1, 2020, 8);
+insert into "2019ceb1319_t" values ('cs203', 4, 1, 2020, 7);
+
+insert into "2019ceb1319_t" values ('cs202', 4, 2, 2020, 8);
+insert into "2019ceb1319_t" values ('cs204', 4, 2, 2020, 7);
+
+grant select, insert, update, delete on time_table, course_batches, course_offerings, course_catalog, student_info, instructor_info, ba_info, pre_requisite to dean;
+
+----------------------------------------------------------------------------------------------------------
+
+
+CREATE OR REPLACE FUNCTION semsg(studentid varchar(12),sem_a integer, year_a integer)
+RETURNS real
+LANGUAGE PLPGSQL
+AS $$
+DECLARE
+sg real;
+num real;
+den real;
+BEGIN
+
+EXECUTE format('select sum(grade * credits) from %I where sem=%L and year=%L;', studentid||'_t', sem_a, year_a) into num;
+EXECUTE format('select sum(credits) from %I where sem=%L and year=%L;', studentid||'_t', sem_a, year_a) into den;
+
+if den > 0.0 then
+sg := num / den;
+end if;
+
+return sg;
+
+END;
+$$;
+
+
+CREATE OR REPLACE FUNCTION generate_transcripts(studentid varchar(12),_sem integer, _year integer)
+RETURNS table(
+    courseid varchar(12),
+    credits real,
+    sem int,
+    year int,
+    grade int
+    )
+LANGUAGE plpgsql
+AS $$
+DECLARE
+i record;
+ret real;
+sum_c real;
+RT record;
+BEGIN
+raise notice '% %',_sem,_year;
+if(_sem=0 and _year=0) then 
+        ret := 0.0;
+        sum_c := 0.0;
+        -- grade = 0.0 is fail and not counted in CG
+        for RT in execute format('select * from %I where grade > 0.0', studentid || '_t') loop
+        sum_c := sum_c + RT.credits;
+        ret := ret + RT.credits * RT.grade;
+        end loop;
+        
+        if sum_c > 0.0 then
+        ret := ret / sum_c;
+        end if;
+
+        raise notice 'The current CGPA of % is %', studentid, ret;
+        return query execute format('select courseid,credits,sem,year,grade from %I',studentid||'_t');
+else
+        ret := semsg(studentid, _sem, _year);
+        raise notice 'The SG of % in % sem and % year is %', studentid, _sem , _year, ret;
+        return query execute format('select courseid,credits,sem,year,grade from %I where sem=%L and year=%L',studentid||'_t',_sem,_year);
+
+end if;
+
+
+END;
+$$;
