@@ -237,16 +237,14 @@ END;
 $$;
 
 
-CREATE OR REPLACE FUNCTION Upload_time_table(filename varchar(400))
+CREATE OR REPLACE FUNCTION Upload_time_table(file_path varchar(400))
 RETURNS void
 LANGUAGE plpgsql
 AS $$
 DECLARE
 csv_path varchar(400);
 BEGIN
--- change security to Everyone
-csv_path := 'C:\Users\Hp\Downloads\' || file_name || '.csv';
-execute format('copy %I from %L with delimiter '','' csv;', time_table, csv_path);
+execute format('copy %I from %L with delimiter '','' csv;', time_table, file_path);
 END;
 $$;
 
@@ -757,6 +755,7 @@ insert into course_catalog values('ge103', 3, 0, 3, 7.5, 4.5);
 insert into course_catalog values('cs101', 3, 1, 0, 5, 3);
 insert into course_catalog values('ma101', 3, 1, 0, 5, 3);
 insert into course_catalog values('cs302', 3, 1, 0, 5, 3);
+insert into course_catalog values('cs304', 4, 1, 0, 5, 4);
 
 select * from course_catalog;
 
@@ -788,7 +787,15 @@ CREATE OR REPLACE FUNCTION create_course_sec_table()
 RETURNS TRIGGER
 LANGUAGE PLPGSQL
 AS $$
+DECLARE
+present_course integer;
 BEGIN
+
+EXECUTE format('select count(*) from course_catalog where courseid=%L', NEW.courseid) into present_course;
+if present_course = 0 then
+    raise exception 'course not present in course catalog';
+end if;
+
 -- we will create course grade as well as course enrollment table (any one can view the enrollment table as in aims)
 EXECUTE format('CREATE TABLE %I (studentid varchar(12));', NEW.courseid || NEW.secid || '_e');
 EXECUTE format('CREATE TABLE %I (studentid varchar(12) primary key, grade integer);', NEW.courseid || NEW.secid || '_g');
